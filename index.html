@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>P2P Multi-Stream</title>
+    <style>
+        :root { --primary: #00ff41; --bg: #0a0a0a; --panel: #1a1a1a; --text: #00ff41; }
+        body { font-family: 'Courier New', monospace; background: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; box-sizing: border-box; }
+        .container { width: 100%; max-width: 600px; border: 1px solid var(--primary); padding: 20px; border-radius: 8px; box-shadow: 0 0 20px rgba(0,255,65,0.2); }
+        video { width: 100%; aspect-ratio: 16/9; background: #000; border: 1px solid #333; margin: 10px 0; border-radius: 4px; }
+        textarea { width: 100%; height: 60px; background: #000; color: var(--primary); border: 1px solid var(--primary); padding: 8px; box-sizing: border-box; font-size: 10px; margin: 5px 0; border-style: dashed; }
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        button { background: transparent; color: var(--primary); border: 1px solid var(--primary); padding: 12px; font-weight: bold; cursor: pointer; }
+        button:hover { background: var(--primary); color: #000; }
+        .step { margin: 15px 0; padding: 10px; background: var(--panel); border-radius: 4px; border: 1px solid #333; }
+        .label { font-size: 0.75rem; font-weight: bold; margin-bottom: 5px; display: block; }
+        #status { color: #fff; font-size: 0.85rem; text-align: center; margin: 10px 0; min-height: 1.2em; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div id="status">P2Pシステム待機中</div>
+    <video id="v" autoplay playsinline controls></video>
+
+    <div id="setupArea" class="controls">
+        <button onclick="initHost()">配信開始 (PC)</button>
+        <button onclick="initGuest()">視聴開始 (スマホ)</button>
+    </div>
+
+    <div id="commArea" class="hidden">
+        <div class="step">
+            <span class="label">1. あなたの短縮コード:</span>
+            <textarea id="localSdp" readonly></textarea>
+            <button style="width:100%; font-size: 12px;" onclick="copyCode()">コピーして相手に送る</button>
+        </div>
+        <div class="step">
+            <span class="label">2. 相手からのコードを貼り付け:</span>
+            <textarea id="remoteSdp" placeholder="ここにペースト"></textarea>
+            <button style="width:100%; background: var(--primary); color: #000;" onclick="connect()">接続実行</button>
+        </div>
+        <p id="multiInfo" style="font-size: 11px; color: #888; text-align: center;"></p>
+    </div>
+    
+    <button id="stopBtn" class="hidden" style="width:100%; margin-top:10px; border-color: #ff4141; color: #ff4141;" onclick="location.reload()">全終了</button>
+</div>
+
+<script>
+    const v = document.getElementById('v'), localSdp = document.getElementById('localSdp'), remoteSdp = document.getElementById('remoteSdp'), status = document.getElementById('status');
+    let pc, stream, connections = [];
+
+    const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }], iceTransportPolicy: 'all', bundlePolicy: 'max-bundle' };
+
+    function setStatus(msg) { status.innerText = ">> " + msg; }
+
+    function createPC() {
+        const newPc = new RTCPeerConnection(config);
+        newPc.onicecandidate = (e) => {
+            if (!e.candidate) {
+                const sdp = newPc.localDescription.sdp.split('\r\n').filter(line => !line.startsWith('a=candidate:1 ')).join('\r\n');
+                localSdp.value = btoa(sdp);
+                setStatus("コード生成完了。相手に送ってください。");
+            }
+        };
+        newPc.ontrack = (e) => {
+            if (v.srcObject !== e.streams[0]) {
+                v.srcObject = e.streams[0];
+                setStatus("ストリーム受信中");
+            }
+        };
+        return newPc;
+    }
+
+    async function initHost() {
+        try {
+            stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+            v.srcObject = stream;
+            v.muted = true;
+            prepareNewConnection();
+            document.getElementById('multiInfo').innerText = "複数人に配信する場合：一人と接続完了後、再度コードを生成して次の人に送ってください。";
+            showCommArea("配信ホスト");
+        } catch (e) { alert("メディア取得失敗: " + e.message); }
+    }
+
+    async function prepareNewConnection() {
+        pc = createPC();
+        stream.getTracks().forEach(t => pc.addTrack(t, stream));
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        localSdp.value = ""; 
+    }
+
+    async function initGuest() {
+        pc = createPC();
+        showCommArea("視聴ゲスト");
+    }
+
+    async function connect() {
+        try {
+            const rawSdp = atob(remoteSdp.value);
+            const type = rawSdp.includes("setup:actpass") ? "offer" : "answer";
+            
+            await pc.setRemoteDescription(new RTCSessionDescription({ type, sdp: rawSdp }));
+            
+            if (type === "offer") {
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+            } else {
+                setStatus("P2Pリンク完了！");
+                if(stream) {
+                    connections.push(pc);
+                    setTimeout(() => {
+                        prepareNewConnection();
+                        setStatus("次の視聴者のためのコードを準備しました");
+                    }, 2000);
+                }
+            }
+        } catch (e) { alert("接続失敗: コードを確認してください"); }
+    }
+
+    function showCommArea(mode) {
+        document.getElementById('setupArea').classList.add('hidden');
+        document.getElementById('commArea').classList.remove('hidden');
+        document.getElementById('stopBtn').classList.remove('hidden');
+        setStatus(mode + "起動");
+    }
+
+    function copyCode() {
+        localSdp.select();
+        localSdp.setSelectionRange(0, 99999);
+        document.execCommand('copy');
+        setStatus("コピーしました。相手に送ってください。");
+    }
+</script>
+</body>
+</html>
