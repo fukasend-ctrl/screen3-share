@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>P2P Multi-Stream (Fixed)</title>
+    <title>P2P Multi-Stream (Multi-Viewer Fixed)</title>
     <style>
         :root { --primary: #00ff41; --bg: #0a0a0a; --panel: #1a1a1a; --text: #00ff41; }
         body { font-family: 'Courier New', monospace; background: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; box-sizing: border-box; }
@@ -11,9 +11,8 @@
         video { width: 100%; aspect-ratio: 16/9; background: #000; border: 1px solid #333; margin: 10px 0; border-radius: 4px; }
         textarea { width: 100%; height: 60px; background: #000; color: var(--primary); border: 1px solid var(--primary); padding: 8px; box-sizing: border-box; font-size: 10px; margin: 5px 0; border-style: dashed; }
         .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        button { background: transparent; color: var(--primary); border: 1px solid var(--primary); padding: 12px; font-weight: bold; cursor: pointer; }
+        button { background: transparent; color: var(--primary); border: 1px solid var(--primary); padding: 12px; font-weight: bold; cursor: pointer; border-radius: 4px; }
         button:hover { background: var(--primary); color: #000; }
-        button:disabled { border-color: #333; color: #333; cursor: not-allowed; }
         .step { margin: 15px 0; padding: 10px; background: var(--panel); border-radius: 4px; border: 1px solid #333; }
         .label { font-size: 0.75rem; font-weight: bold; margin-bottom: 5px; display: block; }
         #status { color: #fff; font-size: 0.85rem; text-align: center; margin: 10px 0; min-height: 1.2em; }
@@ -38,13 +37,11 @@
             <button id="connectBtn" style="width:100%; background: var(--primary); color: #000;" onclick="connect()">接続実行</button>
         </div>
 
-        <div id="stepLocal" class="step hidden">
+        <div id="stepLocal" class="hidden step">
             <span class="label">2. あなたの短縮コード (相手に送る):</span>
             <textarea id="localSdp" readonly></textarea>
             <button id="copyBtn" style="width:100%; font-size: 12px;" onclick="copyCode()">コピーして相手に送る</button>
         </div>
-        
-        <p id="multiInfo" style="font-size: 11px; color: #888; text-align: center;"></p>
     </div>
     
     <button id="stopBtn" class="hidden" style="width:100%; margin-top:10px; border-color: #ff4141; color: #ff4141;" onclick="location.reload()">全終了</button>
@@ -63,17 +60,16 @@
         
         newPc.onicecandidate = (e) => {
             if (!e.candidate && newPc.localDescription) {
-                // 生成されたSDPを表示して選択可能にする
                 localSdp.value = btoa(newPc.localDescription.sdp);
                 document.getElementById('stepLocal').classList.remove('hidden');
-                setStatus("あなたのコードが生成されました。コピーして相手に送ってください。");
+                setStatus("コード生成完了。コピーして相手に送ってください。");
             }
         };
 
         newPc.ontrack = (e) => {
             if (v.srcObject !== e.streams[0]) {
                 v.srcObject = e.streams[0];
-                setStatus("ストリーム受信成功！");
+                setStatus("映像を受信しました！");
                 v.play().catch(() => {});
             }
         };
@@ -86,25 +82,26 @@
             stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
             v.srcObject = stream;
             v.muted = true;
-            
             showCommArea("配信ホスト");
-            prepareNewConnection(); // 最初の視聴者待ち
-        } catch (e) { alert("メディア取得失敗"); }
+            prepareNextGuest();
+        } catch (e) { alert("メディア取得に失敗しました。HTTPS接続を確認してください。"); }
     }
 
-    async function prepareNewConnection() {
+    // 次の視聴者を迎えるための新しいPeerConnectionを作成
+    async function prepareNextGuest() {
         pc = createPC();
         stream.getTracks().forEach(t => pc.addTrack(t, stream));
-        // ホスト側はまず相手からのOfferを待つ形にすることも可能ですが、
-        // 複数人対応のためホストからOfferを作る現行方式を維持します。
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
+        localSdp.value = "";
+        document.getElementById('stepLocal').classList.add('hidden');
+        remoteSdp.value = "";
     }
 
     async function initGuest() {
         pc = createPC();
         showCommArea("視聴ゲスト");
-        setStatus("相手(ホスト)からのコードを貼り付けてください。");
+        setStatus("ホストからのコードを貼り付けてください。");
     }
 
     async function connect() {
@@ -119,22 +116,18 @@
             if (type === "offer") {
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
-                // Answerを作るとonicecandidateが走り、自分のコードが表示される
             } else {
-                setStatus("リンク完了！");
+                setStatus("P2P接続成功！");
                 if(stream) {
-                    connections.push(pc);
+                    connections.push(pc); // 現在の接続を保存
                     setTimeout(() => {
-                        localSdp.value = "";
-                        document.getElementById('stepLocal').classList.add('hidden');
-                        prepareNewConnection();
-                        setStatus("次の視聴者のための準備ができました。");
-                    }, 2000);
+                        prepareNextGuest(); // 次の人のためにリセット
+                        setStatus("次の視聴者のためのコードを準備中...");
+                    }, 1000);
                 }
             }
         } catch (e) { 
-            console.error(e);
-            alert("コードが正しくありません。"); 
+            alert("エラー: コードが正しくないか、有効期限が切れています。"); 
         }
     }
 
@@ -149,7 +142,7 @@
         localSdp.select();
         localSdp.setSelectionRange(0, 99999);
         document.execCommand('copy');
-        setStatus("コピーしました。相手の「2.相手からのコードを貼り付け」に送ってください。");
+        setStatus("コピーしました。");
     }
 </script>
 </body>
