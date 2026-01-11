@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>P2P Multi-Stream (Multi-Viewer Fixed)</title>
+    <title>P2P Multi-Stream (Android Fixed)</title>
     <style>
         :root { --primary: #00ff41; --bg: #0a0a0a; --panel: #1a1a1a; --text: #00ff41; }
         body { font-family: 'Courier New', monospace; background: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; box-sizing: border-box; }
@@ -55,12 +55,29 @@
 
     function setStatus(msg) { status.innerText = ">> " + msg; }
 
+    // 修正: Android/iOSの互換性を高めるためのデコード関数
+    function safeAtob(str) {
+        try {
+            return decodeURIComponent(escape(window.atob(str.trim())));
+        } catch (e) {
+            return window.atob(str.trim());
+        }
+    }
+
+    function safeBtoa(str) {
+        try {
+            return window.btoa(unescape(encodeURIComponent(str)));
+        } catch (e) {
+            return window.btoa(str);
+        }
+    }
+
     function createPC() {
         const newPc = new RTCPeerConnection(config);
         
         newPc.onicecandidate = (e) => {
             if (!e.candidate && newPc.localDescription) {
-                localSdp.value = btoa(newPc.localDescription.sdp);
+                localSdp.value = safeBtoa(newPc.localDescription.sdp);
                 document.getElementById('stepLocal').classList.remove('hidden');
                 setStatus("コード生成完了。コピーして相手に送ってください。");
             }
@@ -69,8 +86,13 @@
         newPc.ontrack = (e) => {
             if (v.srcObject !== e.streams[0]) {
                 v.srcObject = e.streams[0];
-                setStatus("映像を受信しました！");
-                v.play().catch(() => {});
+                setStatus("映像受信中...");
+                // AndroidのChromeでは明示的なplay呼び出しが必要な場合が多い
+                setTimeout(() => {
+                    v.play().catch(err => {
+                        setStatus("再生ボタンを押してください");
+                    });
+                }, 500);
             }
         };
 
@@ -79,15 +101,19 @@
 
     async function initHost() {
         try {
+            // Android等でgetDisplayMediaがない場合の回避
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+                alert("このブラウザは画面配信(PC)専用です。Androidでは視聴モードを使用してください。");
+                return;
+            }
             stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
             v.srcObject = stream;
             v.muted = true;
             showCommArea("配信ホスト");
             prepareNextGuest();
-        } catch (e) { alert("メディア取得に失敗しました。HTTPS接続を確認してください。"); }
+        } catch (e) { alert("失敗: " + e.message); }
     }
 
-    // 次の視聴者を迎えるための新しいPeerConnectionを作成
     async function prepareNextGuest() {
         pc = createPC();
         stream.getTracks().forEach(t => pc.addTrack(t, stream));
@@ -108,7 +134,7 @@
         try {
             const val = remoteSdp.value.trim();
             if(!val) return;
-            const rawSdp = atob(val);
+            const rawSdp = safeAtob(val);
             const type = rawSdp.includes("setup:actpass") ? "offer" : "answer";
             
             await pc.setRemoteDescription(new RTCSessionDescription({ type, sdp: rawSdp }));
@@ -119,15 +145,15 @@
             } else {
                 setStatus("P2P接続成功！");
                 if(stream) {
-                    connections.push(pc); // 現在の接続を保存
+                    connections.push(pc);
                     setTimeout(() => {
-                        prepareNextGuest(); // 次の人のためにリセット
-                        setStatus("次の視聴者のためのコードを準備中...");
-                    }, 1000);
+                        prepareNextGuest();
+                        setStatus("次の視聴者用のコードを準備完了。");
+                    }, 1500);
                 }
             }
         } catch (e) { 
-            alert("エラー: コードが正しくないか、有効期限が切れています。"); 
+            alert("エラー: Androidでコードを正しく読み取れませんでした。"); 
         }
     }
 
