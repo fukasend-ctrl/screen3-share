@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>P2P Multi-Stream (Universal)</title>
+    <title>P2P Multi-Stream (Fixed)</title>
     <style>
         :root { --primary: #00ff41; --bg: #0a0a0a; --panel: #1a1a1a; --text: #00ff41; }
         body { font-family: 'Courier New', monospace; background: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; box-sizing: border-box; }
@@ -13,6 +13,7 @@
         .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         button { background: transparent; color: var(--primary); border: 1px solid var(--primary); padding: 12px; font-weight: bold; cursor: pointer; }
         button:hover { background: var(--primary); color: #000; }
+        button:disabled { border-color: #333; color: #333; cursor: not-allowed; }
         .step { margin: 15px 0; padding: 10px; background: var(--panel); border-radius: 4px; border: 1px solid #333; }
         .label { font-size: 0.75rem; font-weight: bold; margin-bottom: 5px; display: block; }
         #status { color: #fff; font-size: 0.85rem; text-align: center; margin: 10px 0; min-height: 1.2em; }
@@ -31,16 +32,18 @@
     </div>
 
     <div id="commArea" class="hidden">
-        <div class="step">
-            <span class="label">1. あなたの短縮コード:</span>
-            <textarea id="localSdp" readonly></textarea>
-            <button style="width:100%; font-size: 12px;" onclick="copyCode()">コピーして相手に送る</button>
-        </div>
-        <div class="step">
-            <span class="label">2. 相手からのコードを貼り付け:</span>
+        <div id="stepRemote" class="step">
+            <span class="label">1. 相手からのコードを貼り付け:</span>
             <textarea id="remoteSdp" placeholder="ここにペースト"></textarea>
-            <button style="width:100%; background: var(--primary); color: #000;" onclick="connect()">接続実行</button>
+            <button id="connectBtn" style="width:100%; background: var(--primary); color: #000;" onclick="connect()">接続実行</button>
         </div>
+
+        <div id="stepLocal" class="step hidden">
+            <span class="label">2. あなたの短縮コード (相手に送る):</span>
+            <textarea id="localSdp" readonly></textarea>
+            <button id="copyBtn" style="width:100%; font-size: 12px;" onclick="copyCode()">コピーして相手に送る</button>
+        </div>
+        
         <p id="multiInfo" style="font-size: 11px; color: #888; text-align: center;"></p>
     </div>
     
@@ -51,67 +54,64 @@
     const v = document.getElementById('v'), localSdp = document.getElementById('localSdp'), remoteSdp = document.getElementById('remoteSdp'), status = document.getElementById('status');
     let pc, stream, connections = [];
 
-    const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }], iceTransportPolicy: 'all', bundlePolicy: 'max-bundle' };
+    const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
     function setStatus(msg) { status.innerText = ">> " + msg; }
 
     function createPC() {
         const newPc = new RTCPeerConnection(config);
+        
         newPc.onicecandidate = (e) => {
-            if (!e.candidate) {
-                // SDPの圧縮（iOS/Androidでの文字数制限対策）
-                const sdp = newPc.localDescription.sdp;
-                localSdp.value = btoa(sdp); 
-                setStatus("コード生成完了。相手に送ってください。");
+            if (!e.candidate && newPc.localDescription) {
+                // 生成されたSDPを表示して選択可能にする
+                localSdp.value = btoa(newPc.localDescription.sdp);
+                document.getElementById('stepLocal').classList.remove('hidden');
+                setStatus("あなたのコードが生成されました。コピーして相手に送ってください。");
             }
         };
+
         newPc.ontrack = (e) => {
             if (v.srcObject !== e.streams[0]) {
                 v.srcObject = e.streams[0];
-                setStatus("ストリーム受信中");
-                // iOSの自動再生制限を解除するためにplay()を明示的に呼ぶ
-                v.play().catch(() => setStatus("再生ボタンを押してください"));
+                setStatus("ストリーム受信成功！");
+                v.play().catch(() => {});
             }
         };
+
         return newPc;
     }
 
     async function initHost() {
         try {
-            // Android/iOSではgetDisplayMedia（画面配信）が使えないためチェック
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-                alert("この端末は画面共有配信に対応していません。PCから実行してください。");
-                return;
-            }
             stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
             v.srcObject = stream;
             v.muted = true;
-            prepareNewConnection();
-            document.getElementById('multiInfo').innerText = "複数人に配信する場合：一人と接続完了後、再度「1.短縮コード」を生成して次の人に送ってください。";
+            
             showCommArea("配信ホスト");
-        } catch (e) { alert("失敗: " + e.message); }
+            prepareNewConnection(); // 最初の視聴者待ち
+        } catch (e) { alert("メディア取得失敗"); }
     }
 
     async function prepareNewConnection() {
         pc = createPC();
         stream.getTracks().forEach(t => pc.addTrack(t, stream));
+        // ホスト側はまず相手からのOfferを待つ形にすることも可能ですが、
+        // 複数人対応のためホストからOfferを作る現行方式を維持します。
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        localSdp.value = ""; 
     }
 
     async function initGuest() {
         pc = createPC();
-        // 視聴側からもOfferを出せるようにダミーのチャネルを作成（iOS/Android互換性向上）
-        pc.createDataChannel("dummy");
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
         showCommArea("視聴ゲスト");
+        setStatus("相手(ホスト)からのコードを貼り付けてください。");
     }
 
     async function connect() {
         try {
-            const rawSdp = atob(remoteSdp.value.trim());
+            const val = remoteSdp.value.trim();
+            if(!val) return;
+            const rawSdp = atob(val);
             const type = rawSdp.includes("setup:actpass") ? "offer" : "answer";
             
             await pc.setRemoteDescription(new RTCSessionDescription({ type, sdp: rawSdp }));
@@ -119,17 +119,23 @@
             if (type === "offer") {
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
+                // Answerを作るとonicecandidateが走り、自分のコードが表示される
             } else {
-                setStatus("P2Pリンク完了！");
+                setStatus("リンク完了！");
                 if(stream) {
                     connections.push(pc);
                     setTimeout(() => {
+                        localSdp.value = "";
+                        document.getElementById('stepLocal').classList.add('hidden');
                         prepareNewConnection();
-                        setStatus("次の視聴者のためのコードを準備しました");
+                        setStatus("次の視聴者のための準備ができました。");
                     }, 2000);
                 }
             }
-        } catch (e) { alert("コードが正しくありません"); }
+        } catch (e) { 
+            console.error(e);
+            alert("コードが正しくありません。"); 
+        }
     }
 
     function showCommArea(mode) {
@@ -141,9 +147,9 @@
 
     function copyCode() {
         localSdp.select();
-        localSdp.setSelectionRange(0, 99999); // スマホ用選択
+        localSdp.setSelectionRange(0, 99999);
         document.execCommand('copy');
-        setStatus("コピーしました。相手に送ってください。");
+        setStatus("コピーしました。相手の「2.相手からのコードを貼り付け」に送ってください。");
     }
 </script>
 </body>
