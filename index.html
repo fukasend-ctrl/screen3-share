@@ -1,174 +1,97 @@
+
 <!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>P2P Multi-Stream (Android Fixed)</title>
+    <title>NEXUS RECEIVER WebP</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
-        :root { --primary: #00ff41; --bg: #0a0a0a; --panel: #1a1a1a; --text: #00ff41; }
-        body { font-family: 'Courier New', monospace; background: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; box-sizing: border-box; }
-        .container { width: 100%; max-width: 600px; border: 1px solid var(--primary); padding: 20px; border-radius: 8px; box-shadow: 0 0 20px rgba(0,255,65,0.2); }
-        video { width: 100%; aspect-ratio: 16/9; background: #000; border: 1px solid #333; margin: 10px 0; border-radius: 4px; }
-        textarea { width: 100%; height: 60px; background: #000; color: var(--primary); border: 1px solid var(--primary); padding: 8px; box-sizing: border-box; font-size: 10px; margin: 5px 0; border-style: dashed; }
-        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        button { background: transparent; color: var(--primary); border: 1px solid var(--primary); padding: 12px; font-weight: bold; cursor: pointer; border-radius: 4px; }
-        button:hover { background: var(--primary); color: #000; }
-        .step { margin: 15px 0; padding: 10px; background: var(--panel); border-radius: 4px; border: 1px solid #333; }
-        .label { font-size: 0.75rem; font-weight: bold; margin-bottom: 5px; display: block; }
-        #status { color: #fff; font-size: 0.85rem; text-align: center; margin: 10px 0; min-height: 1.2em; }
-        .hidden { display: none; }
+        body { background: #000; color: #00ff41; font-family: sans-serif; margin: 0; padding: 15px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+        #v-container { position: relative; width: 100%; max-width: 500px; line-height: 0; border: 1px solid #333; border-radius: 15px; overflow: hidden; background: #000; box-shadow: 0 0 30px rgba(0,255,65,0.2); }
+        video { width: 100%; aspect-ratio: 16/9; }
+        .fs-btn { position: absolute; bottom: 15px; right: 15px; background: #00ff41; color: #000; border: none; padding: 10px 15px; border-radius: 8px; font-weight: bold; font-size: 12px; z-index: 10; opacity: 0.8; }
+        .ui-box { width: 100%; max-width: 500px; margin-top: 20px; }
+        textarea { width: 100%; height: 90px; background: #111; color: #00ff41; border: 1px solid #333; border-radius: 10px; padding: 12px; font-size: 11px; box-sizing: border-box; margin-bottom: 10px; outline: none; }
+        button { width: 100%; padding: 16px; background: transparent; color: #00ff41; border: 1px solid #00ff41; border-radius: 10px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        button:active { background: #00ff41; color: #000; }
+        #status { font-size: 11px; margin-bottom: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <div id="status">P2Pシステム待機中</div>
-    <video id="v" autoplay playsinline muted controls></video>
+<div id="status">LINK STATUS: STANDBY</div>
 
-    <div id="setupArea" class="controls">
-        <button onclick="initHost()">配信開始 (PC)</button>
-        <button onclick="initGuest()">視聴開始 (スマホ)</button>
+<div id="v-container">
+    <video id="v" autoplay playsinline muted></video>
+    <button class="fs-btn" id="fs-btn">FULLSCREEN</button>
+</div>
+
+<div class="ui-box">
+    <textarea id="remote-sdp" placeholder="1. PCのコードをここに貼り付け"></textarea>
+    <button onclick="startGuest()">視聴コード生成</button>
+
+    <div id="guest-box" style="display:none; margin-top:15px;">
+        <textarea id="local-sdp" readonly placeholder="生成されたコード"></textarea>
+        <button onclick="copyCode()" style="background:#00ff41; color:#000;">コピーしてPCに送信</button>
     </div>
-
-    <div id="commArea" class="hidden">
-        <div id="stepRemote" class="step">
-            <span class="label">1. 相手からのコードを貼り付け:</span>
-            <textarea id="remoteSdp" placeholder="ここにペースト"></textarea>
-            <button id="connectBtn" style="width:100%; background: var(--primary); color: #000;" onclick="connect()">接続実行</button>
-        </div>
-
-        <div id="stepLocal" class="hidden step">
-            <span class="label">2. あなたの短縮コード (相手に送る):</span>
-            <textarea id="localSdp" readonly></textarea>
-            <button id="copyBtn" style="width:100%; font-size: 12px;" onclick="copyCode()">コピーして相手に送る</button>
-        </div>
-    </div>
-    
-    <button id="stopBtn" class="hidden" style="width:100%; margin-top:10px; border-color: #ff4141; color: #ff4141;" onclick="location.reload()">全終了</button>
 </div>
 
 <script>
-    const v = document.getElementById('v'), localSdp = document.getElementById('localSdp'), remoteSdp = document.getElementById('remoteSdp'), status = document.getElementById('status');
-    let pc, stream, connections = [];
-
+    let pc;
     const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+    const video = document.getElementById('v');
 
-    function setStatus(msg) { status.innerText = ">> " + msg; }
+    async function startGuest() {
+        const val = document.getElementById('remote-sdp').value.trim();
+        if(!val) return;
 
-    // 修正: Android/iOSの互換性を高めるためのデコード関数
-    function safeAtob(str) {
-        try {
-            return decodeURIComponent(escape(window.atob(str.trim())));
-        } catch (e) {
-            return window.atob(str.trim());
-        }
-    }
-
-    function safeBtoa(str) {
-        try {
-            return window.btoa(unescape(encodeURIComponent(str)));
-        } catch (e) {
-            return window.btoa(str);
-        }
-    }
-
-    function createPC() {
-        const newPc = new RTCPeerConnection(config);
+        pc = new RTCPeerConnection(config);
         
-        newPc.onicecandidate = (e) => {
-            if (!e.candidate && newPc.localDescription) {
-                localSdp.value = safeBtoa(newPc.localDescription.sdp);
-                document.getElementById('stepLocal').classList.remove('hidden');
-                setStatus("コード生成完了。コピーして相手に送ってください。");
+        // 映像が途切れないための強制再生
+        pc.ontrack = e => {
+            if (video.srcObject !== e.streams[0]) {
+                video.srcObject = e.streams[0];
+                video.play().catch(() => {
+                    // 自動再生に失敗した場合はクリックを促す
+                    document.getElementById('status').innerText = "TAP VIDEO TO START";
+                });
+                document.getElementById('status').innerText = "LINK ESTABLISHED";
             }
         };
 
-        newPc.ontrack = (e) => {
-            if (v.srcObject !== e.streams[0]) {
-                v.srcObject = e.streams[0];
-                setStatus("映像受信中...");
-                // AndroidのChromeでは明示的なplay呼び出しが必要な場合が多い
-                setTimeout(() => {
-                    v.play().catch(err => {
-                        setStatus("再生ボタンを押してください");
-                    });
-                }, 500);
+        const sdpText = decodeURIComponent(escape(atob(val)));
+        await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: sdpText }));
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        pc.onicecandidate = e => {
+            if (!e.candidate) {
+                document.getElementById('local-sdp').value = btoa(unescape(encodeURIComponent(pc.localDescription.sdp)));
+                document.getElementById('guest-box').style.display = 'block';
             }
         };
-
-        return newPc;
     }
 
-    async function initHost() {
-        try {
-            // Android等でgetDisplayMediaがない場合の回避
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-                alert("このブラウザは画面配信(PC)専用です。Androidでは視聴モードを使用してください。");
-                return;
-            }
-            stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-            v.srcObject = stream;
-            v.muted = true;
-            showCommArea("配信ホスト");
-            prepareNextGuest();
-        } catch (e) { alert("失敗: " + e.message); }
-    }
-
-    async function prepareNextGuest() {
-        pc = createPC();
-        stream.getTracks().forEach(t => pc.addTrack(t, stream));
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        localSdp.value = "";
-        document.getElementById('stepLocal').classList.add('hidden');
-        remoteSdp.value = "";
-    }
-
-    async function initGuest() {
-        pc = createPC();
-        showCommArea("視聴ゲスト");
-        setStatus("ホストからのコードを貼り付けてください。");
-    }
-
-    async function connect() {
-        try {
-            const val = remoteSdp.value.trim();
-            if(!val) return;
-            const rawSdp = safeAtob(val);
-            const type = rawSdp.includes("setup:actpass") ? "offer" : "answer";
+    // スマホ全画面対応
+    document.getElementById('fs-btn').addEventListener('click', () => {
+        const container = document.getElementById('v-container');
+        if (!document.fullscreenElement) {
+            if (container.requestFullscreen) container.requestFullscreen();
+            else if (container.webkitRequestFullscreen) container.webkitRequestFullscreen();
             
-            await pc.setRemoteDescription(new RTCSessionDescription({ type, sdp: rawSdp }));
-            
-            if (type === "offer") {
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-            } else {
-                setStatus("P2P接続成功！");
-                if(stream) {
-                    connections.push(pc);
-                    setTimeout(() => {
-                        prepareNextGuest();
-                        setStatus("次の視聴者用のコードを準備完了。");
-                    }, 1500);
-                }
+            if (screen.orientation && screen.orientation.lock) {
+                screen.orientation.lock('landscape').catch(() => {});
             }
-        } catch (e) { 
-            alert("エラー: Androidでコードを正しく読み取れませんでした。"); 
+        } else {
+            document.exitFullscreen();
         }
-    }
-
-    function showCommArea(mode) {
-        document.getElementById('setupArea').classList.add('hidden');
-        document.getElementById('commArea').classList.remove('hidden');
-        document.getElementById('stopBtn').classList.remove('hidden');
-        setStatus(mode + "起動");
-    }
+    });
 
     function copyCode() {
-        localSdp.select();
-        localSdp.setSelectionRange(0, 99999);
+        document.getElementById('local-sdp').select();
         document.execCommand('copy');
-        setStatus("コピーしました。");
     }
 </script>
 </body>
